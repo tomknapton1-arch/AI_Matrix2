@@ -20,7 +20,6 @@ AI_OPTIONS = [
     "Many tasks could be done with AI"
 ]
 
-# The old quadrant names are now used as the "Operating Model" attribute
 MODEL_OPTIONS = [
     "Onshore",
     "Offshore & Onshore",
@@ -29,18 +28,16 @@ MODEL_OPTIONS = [
 ]
 
 def get_marker_style(ai_potential, model):
-    # 1. Color and Size based on AI Potential (Traffic Light System)
-    if ai_potential == AI_OPTIONS[2]:    # Many tasks
+    if ai_potential == AI_OPTIONS[2]:    
         size = 34
-        color = "#2ecc71" # Bright Green
-    elif ai_potential == AI_OPTIONS[1]:  # Some tasks
+        color = "#2ecc71" 
+    elif ai_potential == AI_OPTIONS[1]:  
         size = 24
-        color = "#f1c40f" # Yellow/Gold
-    else:                                # No tasks
+        color = "#f1c40f" 
+    else:                                
         size = 14
-        color = "#95a5a6" # Gray
+        color = "#95a5a6" 
         
-    # 2. Shape based on the current operating model
     if model == MODEL_OPTIONS[0]: symbol = "circle"
     elif model == MODEL_OPTIONS[1]: symbol = "square"
     elif model == MODEL_OPTIONS[2]: symbol = "diamond"
@@ -68,7 +65,6 @@ def add_submission_dialog():
         col1, col2 = st.columns(2)
         if col1.form_submit_button("Submit", type="primary"):
             if name:
-                # Jitter adjusted for the new 1-10 scale
                 jx = random.uniform(-0.3, 0.3)
                 jy = random.uniform(-0.3, 0.3)
                 
@@ -124,49 +120,25 @@ def edit_submission_dialog(preselected_idx=0):
         st.session_state['projects'].pop(idx)
         st.rerun()
 
-# ==========================================
-# MAIN PAGE LAYOUT
-# ==========================================
-
-col_title, col_empty, col_add, col_edit = st.columns([5, 1, 1.5, 1.5])
-
-with col_title:
-    st.title("AI Prioritization Dashboard")
-    st.markdown("Target the largest, greenest dots in the **Quick Wins** quadrant.")
-
-with col_add:
-    st.write("") 
-    if st.button("➕ Add Submission", use_container_width=True): add_submission_dialog()
-
-with col_edit:
-    st.write("") 
-    if st.button("✏️ Edit Submission", use_container_width=True): edit_submission_dialog()
-
-# Visual Legend
-st.info("**Color = AI Potential:** 🟢 Many Tasks | 🟡 Some Tasks | ⚪ No Tasks &nbsp;&nbsp;&nbsp; **Shape = Model:** ● Onshore | ■ Offshore & Onshore | ◆ Onshore + Automation | ▲ Onshore + AI")
-
 projects = st.session_state['projects']
 
 # ==========================================
-# PLOTLY GRID GENERATION
+# 1. BUILD PLOTLY GRID (Built first for PDF export)
 # ==========================================
 
 fig = go.Figure()
 
-# Set up the Value vs Effort Matrix layout
 fig.update_layout(
     shapes=[
-        # Crosshairs at the middle (5.5 on a 1-10 scale)
         dict(type='line', x0=5.5, x1=5.5, y0=0.5, y1=10.5, line=dict(color='gray', dash='dash')),
         dict(type='line', x0=0.5, x1=10.5, y0=5.5, y1=5.5, line=dict(color='gray', dash='dash'))
     ],
     xaxis=dict(range=[0.5, 10.5], title='<b>Ease of Implementation</b> (1 = Hard, 10 = Easy) →', dtick=1),
     yaxis=dict(range=[0.5, 10.5], title='<b>Business Impact / ROI</b> (1 = Low, 10 = High) →', dtick=1),
-    height=750, # Slightly shorter to make room for the table below
+    height=750, 
     margin=dict(t=40, b=40, l=40, r=40) 
 )
 
-# Background Quadrant Labels
 fig.update_layout(
     annotations=[
         dict(x=8, y=8, text="<b>QUICK WINS</b><br>(High Impact, Easy)", font=dict(size=24, color="rgba(150,150,150,0.2)"), showarrow=False, align="center"),
@@ -181,7 +153,6 @@ if projects:
     ys = [p['impact'] + p.get('jy', 0) for p in projects]
     names = [p['name'] for p in projects]
     
-    # Generate styles for each dot
     sizes, colors, symbols = [], [], []
     for p in projects:
         sz, col, sym = get_marker_style(p.get('ai_potential'), p.get('model'))
@@ -200,33 +171,67 @@ if projects:
         hovertext=[f"<b>{p['name']}</b><br>Impact: {p['impact']} | Ease: {p['ease']}<br>Model: {p['model']}<br>AI Potential: {p['ai_potential']}" for p in projects] 
     ))
 
-# Render the interactive plot
+# ==========================================
+# 2. MAIN PAGE LAYOUT & BUTTONS
+# ==========================================
+
+col_title, col_add, col_edit, col_export = st.columns([4, 1.5, 1.5, 1.5])
+
+with col_title:
+    st.title("AI Prioritization Dashboard")
+    st.markdown("Target the largest, greenest dots in the **Quick Wins** quadrant.")
+
+with col_add:
+    st.write("") 
+    if st.button("➕ Add Submission", use_container_width=True): add_submission_dialog()
+
+with col_edit:
+    st.write("") 
+    if st.button("✏️ Edit Submission", use_container_width=True): edit_submission_dialog()
+
+with col_export:
+    st.write("")
+    # Attempt to generate the PDF bytes. Will fail gracefully if kaleido is missing.
+    try:
+        pdf_bytes = fig.to_image(format="pdf")
+        st.download_button(
+            label="📄 Export to PDF",
+            data=pdf_bytes,
+            file_name="AI_Prioritization_Dashboard.pdf",
+            mime="application/pdf",
+            use_container_width=True
+        )
+    except Exception as e:
+        # Gray out the button and provide a tooltip if they don't have kaleido installed
+        st.button("📄 Export to PDF", disabled=True, help="Requires 'kaleido' package. Run: pip install kaleido", use_container_width=True)
+
+st.info("**Color = AI Potential:** 🟢 Many Tasks | 🟡 Some Tasks | ⚪ No Tasks &nbsp;&nbsp;&nbsp; **Shape = Model:** ● Onshore | ■ Offshore & Onshore | ◆ Onshore + Automation | ▲ Onshore + AI")
+
+# ==========================================
+# 3. RENDER VISUALS
+# ==========================================
+
 event = st.plotly_chart(fig, use_container_width=True, on_select="rerun", selection_mode="points")
 
-# Click-to-edit functionality
 if "selection" in event and "points" in event["selection"] and len(event["selection"]["points"]) > 0:
     clicked_idx = event["selection"]["points"][0]["customdata"]
     edit_submission_dialog(preselected_idx=clicked_idx)
 
 # ==========================================
-# DATA HUB (SORTABLE TABLE)
+# 4. DATA HUB (SORTABLE TABLE)
 # ==========================================
 
 st.divider()
 st.subheader("Project Data Hub")
 
 if projects:
-    # Convert session state to a pandas dataframe
     df = pd.DataFrame(projects)
     
-    # Filter out the jitter coordinates and rearrange columns for the user
     display_df = df[['name', 'impact', 'ease', 'model', 'ai_potential']].copy()
     display_df.columns = ["Project Name", "Business Impact (1-10)", "Ease of Implementation (1-10)", "Current Model", "AI Potential"]
     
-    # Automatically sort to bubble the best projects (High Impact, High Ease) to the top
     display_df = display_df.sort_values(by=["Business Impact (1-10)", "Ease of Implementation (1-10)"], ascending=[False, False])
     
-    # Display the interactive table
     st.dataframe(display_df, use_container_width=True, hide_index=True)
 else:
     st.info("Add a project to see the data table.")
