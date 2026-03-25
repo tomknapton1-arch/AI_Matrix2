@@ -2,13 +2,74 @@ import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
 import random
+import gspread
+from google.oauth2.service_account import Credentials
 
-# Set the page layout to wide
+# ==========================================
+# PAGE CONFIG
+# ==========================================
 st.set_page_config(layout="wide", page_title="AI Prioritization Dashboard")
 
-# Initialize project list storage
-if 'projects' not in st.session_state:
-    st.session_state['projects'] = []
+# ==========================================
+# GOOGLE SHEETS CONNECTION
+# ==========================================
+
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive"
+]
+
+@st.cache_resource
+def get_google_sheet():
+    creds = Credentials.from_service_account_info(
+        st.secrets["gcp_service_account"], scopes=SCOPES
+    )
+    client = gspread.authorize(creds)
+    sheet = client.open_by_url(st.secrets["SHEET_URL"]).sheet1
+    return sheet
+
+def load_projects():
+    try:
+        sheet = get_google_sheet()
+        records = sheet.get_all_records()
+        for r in records:
+            for field in ['impact', 'ease', 'jx', 'jy']:
+                try:
+                    r[field] = float(r[field])
+                except (ValueError, KeyError):
+                    r[field] = 0.0
+        return records
+    except Exception as e:
+        st.error(f"Could not load data from Google Sheets: {e}")
+        return []
+
+def save_projects(projects):
+    try:
+        sheet = get_google_sheet()
+        sheet.resize(1)
+        if projects:
+            rows = []
+            for p in projects:
+                rows.append([
+                    p.get('name', ''),
+                    p.get('impact', 5),
+                    p.get('ease', 5),
+                    p.get('model', ''),
+                    p.get('ai_potential', ''),
+                    p.get('jx', 0.0),
+                    p.get('jy', 0.0),
+                ])
+            sheet.append_rows(rows)
+    except Exception as e:
+        st.error(f"Could not save data to Google Sheets: {e}")
+
+# ==========================================
+# LOAD DATA ON STARTUP
+# ==========================================
+
+if 'projects' not in st.session_state or st.session_state.get('force_reload', False):
+    st.session_state['projects'] = load_projects()
+    st.session_state['force_reload'] = False
 
 # ==========================================
 # CONFIGURATION & HELPER FUNCTIONS
@@ -55,8 +116,8 @@ def add_submission_dialog():
         name = st.text_input("Project Name")
         
         st.markdown("**Strategic Scoring (1-10)**")
-        impact = st.slider("Business Impact / ROI (1 = Low, 10 = High)", 1, 10, 5)
-        ease = st.slider("Ease of Implementation (1 = Hard, 10 = Easy)", 1, 10, 5)
+        impact = st.slider("Business Impact / ROI (1=Low, 10=High)", 1, 10, 5)
+        ease = st.slider("Ease of Implementation (1=Hard, 10=Easy)", 1, 10, 5)
         
         st.markdown("**Project Details**")
         model = st.selectbox("Current Operating Model", MODEL_OPTIONS)
@@ -65,18 +126,17 @@ def add_submission_dialog():
         col1, col2 = st.columns(2)
         if col1.form_submit_button("Submit", type="primary"):
             if name:
-                jx = random.uniform(-0.3, 0.3)
-                jy = random.uniform(-0.3, 0.3)
-                
-                st.session_state['projects'].append({
+                new_project = {
                     "name": name,
                     "impact": impact,
                     "ease": ease,
                     "model": model,
                     "ai_potential": ai_potential,
-                    "jx": jx,
-                    "jy": jy,
-                })
+                    "jx": random.uniform(-0.3, 0.3),
+                    "jy": random.uniform(-0.3, 0.3),
+                }
+                st.session_state['projects'].append(new_project)
+                save_projects(st.session_state['projects'])
                 st.rerun()
             else:
                 st.error("Please enter a project name.")
@@ -100,30 +160,38 @@ def edit_submission_dialog(preselected_idx=0):
     new_name = st.text_input("Project Name", value=proj['name'])
     
     st.markdown("**Strategic Scoring (1-10)**")
-    new_impact = st.slider("Business Impact / ROI", 1, 10, proj.get('impact', 5))
-    new_ease = st.slider("Ease of Implementation", 1, 10, proj.get('ease', 5))
+    new_impact = st.slider("Business Impact / ROI", 1, 10, int(proj.get('impact', 5)))
+    new_ease = st.slider("Ease of Implementation", 1, 10, int(proj.get('ease', 5)))
     
     st.markdown("**Project Details**")
-    new_model = st.selectbox("Current Operating Model", MODEL_OPTIONS, index=MODEL_OPTIONS.index(proj.get('model', MODEL_OPTIONS[0])))
-    new_ai = st.selectbox("Potential for further AI tasks", AI_OPTIONS, index=AI_OPTIONS.index(proj.get('ai_potential', AI_OPTIONS[0])))
+    new_model = st.selectbox(
+        "Current Operating Model", MODEL_OPTIONS,
+        index=MODEL_OPTIONS.index(proj.get('model', MODEL_OPTIONS[0])) if proj.get('model') in MODEL_OPTIONS else 0
+    )
+    new_ai = st.selectbox(
+        "Potential for further AI tasks", AI_OPTIONS,
+        index=AI_OPTIONS.index(proj.get('ai_potential', AI_OPTIONS[0])) if proj.get('ai_potential') in AI_OPTIONS else 0
+    )
     
     col1, col2 = st.columns(2)
     if col1.button("Save Changes", type="primary", use_container_width=True):
         proj.update({
-            'name': new_name, 'impact': new_impact, 'ease': new_ease, 
+            'name': new_name, 'impact': new_impact, 'ease': new_ease,
             'model': new_model, 'ai_potential': new_ai
         })
         st.session_state['projects'][idx] = proj
+        save_projects(st.session_state['projects'])
         st.rerun()
         
     if col2.button("Delete Project", use_container_width=True):
         st.session_state['projects'].pop(idx)
+        save_projects(st.session_state['projects'])
         st.rerun()
 
 projects = st.session_state['projects']
 
 # ==========================================
-# 1. BUILD PLOTLY GRID (Built first for PDF export)
+# BUILD PLOTLY 2D CHART
 # ==========================================
 
 fig = go.Figure()
@@ -135,8 +203,8 @@ fig.update_layout(
     ],
     xaxis=dict(range=[0.5, 10.5], title='<b>Ease of Implementation</b> (1 = Hard, 10 = Easy) →', dtick=1),
     yaxis=dict(range=[0.5, 10.5], title='<b>Business Impact / ROI</b> (1 = Low, 10 = High) →', dtick=1),
-    height=750, 
-    margin=dict(t=40, b=40, l=40, r=40) 
+    height=750,
+    margin=dict(t=40, b=40, l=40, r=40)
 )
 
 fig.update_layout(
@@ -161,37 +229,48 @@ if projects:
         symbols.append(sym)
     
     fig.add_trace(go.Scatter(
-        x=xs, y=ys, 
-        mode='markers+text',         
-        text=names,                  
-        textposition='top center',   
-        marker=dict(size=sizes, color=colors, symbol=symbols, line=dict(width=1, color='DarkSlateGrey')),        
+        x=xs, y=ys,
+        mode='markers+text',
+        text=names,
+        textposition='top center',
+        marker=dict(
+            size=sizes, color=colors, symbol=symbols,
+            line=dict(width=1, color='DarkSlateGrey')
+        ),
         customdata=list(range(len(projects))),
         hoverinfo='text',
-        hovertext=[f"<b>{p['name']}</b><br>Impact: {p['impact']} | Ease: {p['ease']}<br>Model: {p['model']}<br>AI Potential: {p['ai_potential']}" for p in projects] 
+        hovertext=[
+            f"<b>{p['name']}</b><br>Impact: {p['impact']} | Ease: {p['ease']}<br>Model: {p['model']}<br>AI Potential: {p['ai_potential']}"
+            for p in projects
+        ]
     ))
 
 # ==========================================
-# 2. MAIN PAGE LAYOUT & BUTTONS
+# MAIN PAGE LAYOUT & BUTTONS
 # ==========================================
 
-col_title, col_add, col_edit, col_export = st.columns([4, 1.5, 1.5, 1.5])
+col_title, col_refresh, col_add, col_edit, col_export = st.columns([4, 1.2, 1.5, 1.5, 1.5])
 
 with col_title:
     st.title("AI Prioritization Dashboard")
     st.markdown("Target the largest, greenest dots in the **Quick Wins** quadrant.")
 
+with col_refresh:
+    st.write("")
+    if st.button("🔄 Refresh Data", use_container_width=True):
+        st.session_state['projects'] = load_projects()
+        st.rerun()
+
 with col_add:
-    st.write("") 
+    st.write("")
     if st.button("➕ Add Submission", use_container_width=True): add_submission_dialog()
 
 with col_edit:
-    st.write("") 
+    st.write("")
     if st.button("✏️ Edit Submission", use_container_width=True): edit_submission_dialog()
 
 with col_export:
     st.write("")
-    # Attempt to generate the PDF bytes. Will fail gracefully if kaleido is missing.
     try:
         pdf_bytes = fig.to_image(format="pdf")
         st.download_button(
@@ -201,14 +280,13 @@ with col_export:
             mime="application/pdf",
             use_container_width=True
         )
-    except Exception as e:
-        # Gray out the button and provide a tooltip if they don't have kaleido installed
-        st.button("📄 Export to PDF", disabled=True, help="Requires 'kaleido' package. Run: pip install kaleido", use_container_width=True)
+    except Exception:
+        st.button("📄 Export to PDF", disabled=True, help="Requires 'kaleido'. Run: pip install kaleido", use_container_width=True)
 
 st.info("**Color = AI Potential:** 🟢 Many Tasks | 🟡 Some Tasks | ⚪ No Tasks &nbsp;&nbsp;&nbsp; **Shape = Model:** ● Onshore | ■ Offshore & Onshore | ◆ Onshore + Automation | ▲ Onshore + AI")
 
 # ==========================================
-# 3. RENDER VISUALS
+# RENDER CHART
 # ==========================================
 
 event = st.plotly_chart(fig, use_container_width=True, on_select="rerun", selection_mode="points")
@@ -218,7 +296,7 @@ if "selection" in event and "points" in event["selection"] and len(event["select
     edit_submission_dialog(preselected_idx=clicked_idx)
 
 # ==========================================
-# 4. DATA HUB (SORTABLE TABLE)
+# DATA HUB (SORTABLE TABLE)
 # ==========================================
 
 st.divider()
@@ -226,12 +304,16 @@ st.subheader("Project Data Hub")
 
 if projects:
     df = pd.DataFrame(projects)
-    
     display_df = df[['name', 'impact', 'ease', 'model', 'ai_potential']].copy()
-    display_df.columns = ["Project Name", "Business Impact (1-10)", "Ease of Implementation (1-10)", "Current Model", "AI Potential"]
-    
-    display_df = display_df.sort_values(by=["Business Impact (1-10)", "Ease of Implementation (1-10)"], ascending=[False, False])
-    
+    display_df.columns = [
+        "Project Name", "Business Impact (1-10)",
+        "Ease of Implementation (1-10)",
+        "Current Model", "AI Potential"
+    ]
+    display_df = display_df.sort_values(
+        by=["Business Impact (1-10)", "Ease of Implementation (1-10)"],
+        ascending=[False, False]
+    )
     st.dataframe(display_df, use_container_width=True, hide_index=True)
 else:
     st.info("Add a project to see the data table.")
